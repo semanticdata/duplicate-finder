@@ -178,21 +178,25 @@ def main() -> None:
         else:
             # Handle KB, MB, GB, etc.
             size_str = args.min_size.upper()
-            if (
-                size_str.endswith("B")
-                and len(size_str) > 1
-                and not size_str[-2].isdigit()
-            ):
-                size_str = size_str[:-1]
-
-            if size_str.isdigit():
+            if size_str.endswith("B"):
+                # Handle plain bytes (e.g., "1B", "100B")
+                if size_str[:-1].isdigit():
+                    min_size = int(size_str[:-1])
+                else:
+                    # Handle KB, MB, GB, TB
+                    if len(size_str) > 2 and not size_str[-2].isdigit():
+                        size_str = size_str[:-1]  # Remove 'B' for unit processing
+                        units = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
+                        if size_str[-1] in units and size_str[:-1].isdigit():
+                            min_size = int(size_str[:-1]) * units[size_str[-1]]
+                        else:
+                            raise ValueError(f"Invalid size format: {args.min_size}")
+                    else:
+                        raise ValueError(f"Invalid size format: {args.min_size}")
+            elif size_str.isdigit():
                 min_size = int(size_str)
             else:
-                units = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
-                if size_str[-1] in units and size_str[:-1].isdigit():
-                    min_size = int(size_str[:-1]) * units[size_str[-1]]
-                else:
-                    raise ValueError(f"Invalid size format: {args.min_size}")
+                raise ValueError(f"Invalid size format: {args.min_size}")
     except Exception:
         print(f"Error: Invalid minimum size format: {args.min_size}", file=sys.stderr)
         print("Please use formats like: 10KB, 5MB, 1GB", file=sys.stderr)

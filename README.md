@@ -92,3 +92,11 @@ The script provides the following information:
 - Space taken by duplicates
 - Potential space savings
 - Detailed list of duplicate files grouped by content
+
+## Testing
+
+To run the tests, use the following command:
+
+```bash
+uv run pytest tests/
+```
