@@ -1,7 +1,7 @@
 [project]
 name = "duplicate-finder"
 version = "0.1.0"
-description = "Add your description here"
+description = "This script is used to find duplicate files in a directory."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
