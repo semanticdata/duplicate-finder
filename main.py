@@ -297,53 +297,6 @@ def setup_logging(verbose: bool = False) -> None:
     logger.addHandler(RichHandler())
 
 
-def export_to_file(
-    duplicates: Dict[str, List[str]], output_file: str, format: str = "txt"
-) -> None:
-    """Export duplicate files list to a file in the specified format.
-
-    Args:
-        duplicates: Dictionary mapping file hash to list of duplicate file paths
-        output_file: Path where the output file will be created
-        format: Output format, one of 'txt', 'json', or 'csv'
-            - txt: Human-readable text format with duplicate sets
-            - json: Structured JSON with duplicate sets and file sizes
-            - csv: Tabular format with set number, size, and file path
-    """
-    logger = logging.getLogger(__name__)
-
-    if format == "json":
-        # Convert to a more JSON-friendly format
-        json_data = {
-            "duplicate_sets": [
-                {"size": os.path.getsize(files[0]), "files": files}
-                for files in duplicates.values()
-            ]
-        }
-        with open(output_file, "w") as f:
-            json.dump(json_data, f, indent=2)
-
-    elif format == "csv":
-        with open(output_file, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["Set", "Size", "File"])
-            for i, (_, files) in enumerate(duplicates.items(), 1):
-                size = os.path.getsize(files[0])
-                for filepath in files:
-                    writer.writerow([i, size, filepath])
-
-    else:  # txt format
-        with open(output_file, "w") as f:
-            for hash_value, file_list in duplicates.items():
-                f.write(
-                    f"\nDuplicate set (size: {humanize.naturalsize(os.path.getsize(file_list[0]))})\n"
-                )
-                for filepath in file_list:
-                    f.write(f"  {filepath}\n")
-
-    logger.info(f"Results exported to {output_file} in {format} format")
-
-
 def main() -> None:
     """Main entry point for the duplicate file finder.
 
