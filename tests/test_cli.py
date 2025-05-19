@@ -89,10 +89,13 @@ def test_cli_with_options(temp_dir, capsys):
 
     # Verify output contains expected duplicate files
     captured = capsys.readouterr()
-    assert "Duplicate files:" in captured.out
+    # Check for the new rich-formatted output
+    assert "Duplicate set" in captured.out
     assert str(temp_dir / "file1.txt") in captured.out
     assert str(temp_dir / "file2.txt") in captured.out
-    assert str(excluded_dir / "excluded.txt") not in captured.out
+    assert (
+        str(excluded_dir / "excluded.txt") not in captured.out
+    )  # Verify excluded dir is respected
 
 
 def test_cli_export_results(temp_dir):
