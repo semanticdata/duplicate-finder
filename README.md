@@ -92,8 +92,3 @@ The script provides the following information:
 - Space taken by duplicates
 - Potential space savings
 - Detailed list of duplicate files grouped by content
-
-## Requirements
-
-- Python 3.6+
-- humanize package ( pip install humanize )

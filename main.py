@@ -3,15 +3,17 @@
 # It then prints the duplicate files and the total size of the duplicate files.
 # It also prints the potential space savings if the duplicate files are removed.
 
-import os
-import hashlib
-from collections import defaultdict
-from pathlib import Path
 import argparse
+import hashlib
+import multiprocessing
+import os
 import sys
-from typing import Dict, List, Set, Tuple, Optional
-import humanize
 import time
+from collections import defaultdict
+from multiprocessing import Pool
+from typing import Dict, List, Tuple
+
+import humanize
 
 
 def calculate_file_hash(filepath: str, block_size: int = 65536) -> str:
@@ -26,6 +28,20 @@ def calculate_file_hash(filepath: str, block_size: int = 65536) -> str:
     return md5.hexdigest()
 
 
+def process_file(file_info: Tuple[str, int, int]) -> Tuple[str, str, int]:
+    """Process a single file and return its hash, path, and size."""
+    filepath, min_size, block_size = file_info
+    try:
+        file_size = os.path.getsize(filepath)
+        if file_size < min_size:
+            return None
+
+        file_hash = calculate_file_hash(filepath, block_size)
+        return (file_hash, filepath, file_size)
+    except (IOError, OSError):
+        return None
+
+
 def find_duplicates(
     directory: str,
     exclude_dirs: List[str] = None,
@@ -34,12 +50,10 @@ def find_duplicates(
     verbose: bool = False,
     ignore_dot_dirs: bool = True,
 ) -> Tuple[Dict[str, List[str]], int, int, int]:
-    """Find duplicate files in the given directory."""
+    """Find duplicate files in the given directory using parallel processing."""
     hash_map: Dict[str, List[str]] = defaultdict(list)
     total_size = 0
-    duplicate_size = 0
     files_processed = 0
-    start_time = time.time()
 
     # Normalize exclude directories to absolute paths
     exclude_dirs = exclude_dirs or []
@@ -49,59 +63,54 @@ def find_duplicates(
     exclude_extensions = exclude_extensions or []
     exclude_extensions = [ext.lower() for ext in exclude_extensions]
 
-    # Walk through the directory
+    # Collect all files to process
+    files_to_process = []
     for root, dirs, files in os.walk(directory):
-        # Skip excluded directories
         if any(os.path.abspath(root).startswith(d) for d in exclude_dirs):
             if verbose:
                 print(f"Skipping excluded directory: {root}")
             continue
 
-        # Skip directories that start with a dot if ignore_dot_dirs is True
         if ignore_dot_dirs:
-            # Modify dirs in-place to prevent os.walk from traversing dot directories
             dirs[:] = [d for d in dirs if not d.startswith(".")]
 
         for filename in files:
-            filepath = os.path.join(root, filename)
-
-            # Skip files with excluded extensions
             if exclude_extensions and any(
                 filename.lower().endswith(ext) for ext in exclude_extensions
             ):
                 if verbose:
-                    print(f"Skipping excluded file type: {filepath}")
+                    print(
+                        f"Skipping excluded file type: {os.path.join(root, filename)}"
+                    )
                 continue
 
-            try:
-                file_size = os.path.getsize(filepath)
+            filepath = os.path.join(root, filename)
+            files_to_process.append((filepath, min_size, 65536))
 
-                # Skip files smaller than min_size
-                if file_size < min_size:
-                    if verbose:
-                        print(
-                            f"Skipping file smaller than {humanize.naturalsize(min_size)}: {filepath}"
-                        )
-                    continue
+    # Process files in parallel
+    cpu_count = multiprocessing.cpu_count()
+    with Pool(processes=cpu_count) as pool:
+        if verbose:
+            print(f"Processing files using {cpu_count} CPU cores...")
 
-                files_processed += 1
-                if verbose and files_processed % 100 == 0:
-                    elapsed = time.time() - start_time
-                    print(
-                        f"Processed {files_processed} files in {elapsed:.2f} seconds..."
-                    )
+        results = pool.imap_unordered(process_file, files_to_process)
 
-                file_hash = calculate_file_hash(filepath)
-                total_size += file_size
+        for result in results:
+            if result:
+                file_hash, filepath, file_size = result
                 hash_map[file_hash].append(filepath)
-            except (IOError, OSError) as e:
-                print(f"Error processing {filepath}: {e}", file=sys.stderr)
+                total_size += file_size
+                files_processed += 1
+
+                if verbose and files_processed % 100 == 0:
+                    print(f"Processed {files_processed} files...")
 
     # Filter out unique files and calculate duplicate size
     duplicate_files = {h: files for h, files in hash_map.items() if len(files) > 1}
-    for _, files in duplicate_files.items():
-        if files:
-            duplicate_size += os.path.getsize(files[0]) * (len(files) - 1)
+    duplicate_size = sum(
+        os.path.getsize(files[0]) * (len(files) - 1)
+        for files in duplicate_files.values()
+    )
 
     return duplicate_files, total_size, duplicate_size, files_processed
 
@@ -184,7 +193,7 @@ def main() -> None:
                     min_size = int(size_str[:-1]) * units[size_str[-1]]
                 else:
                     raise ValueError(f"Invalid size format: {args.min_size}")
-    except Exception as e:
+    except Exception:
         print(f"Error: Invalid minimum size format: {args.min_size}", file=sys.stderr)
         print("Please use formats like: 10KB, 5MB, 1GB", file=sys.stderr)
         sys.exit(1)
