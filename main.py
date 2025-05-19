@@ -10,6 +10,7 @@ import argparse
 import csv
 import hashlib
 import json
+import logging
 import multiprocessing
 import os
 import sys
@@ -21,146 +22,195 @@ from typing import Dict, List, Optional, Tuple
 import humanize
 
 
-def calculate_file_hash(filepath: str, block_size: int = 65536) -> str:
-    """Calculate MD5 hash of a file using block-wise reading.
+class SizeParser:
+    """Utility class for parsing human-readable file sizes."""
 
-    Args:
-        filepath: Path to the file to hash
-        block_size: Size of blocks to read, defaults to 64KB
+    UNITS = {
+        "K": 1024,
+        "M": 1024**2,
+        "G": 1024**3,
+        "T": 1024**4,
+    }
 
-    Returns:
-        str: Hexadecimal MD5 hash of the file
+    @staticmethod
+    def parse_size(size_str: str) -> int:
+        """Convert human-readable size string to bytes.
 
-    Raises:
-        IOError: If file cannot be read
-        OSError: If file access fails
-    """
-    md5 = hashlib.md5()
-    with open(filepath, "rb") as f:
-        while True:
-            data = f.read(block_size)
-            if not data:
-                break
-            md5.update(data)
-    return md5.hexdigest()
+        Args:
+            size_str: Size string (e.g., '10KB', '5MB', '1GB')
+
+        Returns:
+            int: Size in bytes
+
+        Raises:
+            ValueError: If size format is invalid
+        """
+        size_str = size_str.upper()
+
+        # Handle special case for 0B
+        if size_str == "0B":
+            return 0
+
+        # Handle plain bytes or numeric value
+        if size_str.isdigit():
+            return int(size_str)
+
+        if size_str.endswith("B"):
+            # Handle plain bytes (e.g., "1B", "100B")
+            if size_str[:-1].isdigit():
+                return int(size_str[:-1])
+
+            # Handle KB, MB, GB, TB
+            if len(size_str) > 2 and not size_str[-2].isdigit():
+                size_str = size_str[:-1]  # Remove 'B' for unit processing
+                unit = size_str[-1]
+                if unit in SizeParser.UNITS and size_str[:-1].isdigit():
+                    return int(size_str[:-1]) * SizeParser.UNITS[unit]
+
+        raise ValueError(f"Invalid size format: {size_str}")
 
 
-def process_file(file_info: Tuple[str, int, int]) -> Optional[Tuple[str, str, int]]:
-    """Process a single file by calculating its hash if it meets size criteria.
+class FileProcessor:
+    """Handles file processing operations for duplicate detection."""
 
-    Args:
-        file_info: Tuple containing (filepath, minimum_size, block_size)
+    def __init__(self, block_size: int = 65536):
+        self.block_size = block_size
+        self.logger = logging.getLogger(__name__)
 
-    Returns:
-        Optional[Tuple[str, str, int]]: Tuple of (hash, filepath, size) if file meets criteria,
-                                      None if file is too small or cannot be processed
+    def calculate_file_hash(self, filepath: str) -> str:
+        """Calculate MD5 hash of a file using block-wise reading.
 
-    Note:
-        Returns None if file size is less than minimum_size or if file cannot be accessed
-    """
-    filepath, min_size, block_size = file_info
-    try:
-        file_size = os.path.getsize(filepath)
-        if file_size < min_size:
+        Args:
+            filepath: Path to the file to hash
+
+        Returns:
+            str: Hexadecimal MD5 hash of the file
+
+        Raises:
+            IOError: If file cannot be read
+            OSError: If file access fails
+        """
+        md5 = hashlib.md5()
+        with open(filepath, "rb") as f:
+            while True:
+                data = f.read(self.block_size)
+                if not data:
+                    break
+                md5.update(data)
+        return md5.hexdigest()
+
+    def process_file(
+        self, file_info: Tuple[str, int]
+    ) -> Optional[Tuple[str, str, int]]:
+        """Process a single file by calculating its hash if it meets size criteria.
+
+        Args:
+            file_info: Tuple containing (filepath, minimum_size)
+
+        Returns:
+            Optional[Tuple[str, str, int]]: Tuple of (hash, filepath, size) if file meets criteria,
+                                          None if file is too small or cannot be processed
+        """
+        filepath, min_size = file_info
+        try:
+            file_size = os.path.getsize(filepath)
+            if file_size < min_size:
+                self.logger.debug(
+                    f"Skipping {filepath} (size: {file_size} < {min_size})"
+                )
+                return None
+
+            file_hash = self.calculate_file_hash(filepath)
+            return (file_hash, filepath, file_size)
+        except (IOError, OSError) as e:
+            self.logger.error(f"Error processing {filepath}: {str(e)}")
             return None
 
-        file_hash = calculate_file_hash(filepath, block_size)
-        return (file_hash, filepath, file_size)
-    except (IOError, OSError):
-        return None
+    def find_duplicates(
+        self,
+        directory: str,
+        exclude_dirs: List[str] = None,
+        exclude_extensions: List[str] = None,
+        min_size: int = 0,
+        verbose: bool = False,
+        ignore_dot_dirs: bool = True,
+    ) -> Tuple[Dict[str, List[str]], int, int, int]:
+        """Find duplicate files in the given directory using parallel processing.
 
+        Args:
+            directory: Root directory to scan
+            exclude_dirs: List of directory paths to exclude from scan
+            exclude_extensions: List of file extensions to exclude (e.g., ['.log', '.tmp'])
+            min_size: Minimum file size in bytes to consider
+            verbose: Whether to enable verbose logging
+            ignore_dot_dirs: Whether to skip directories starting with a dot
 
-def find_duplicates(
-    directory: str,
-    exclude_dirs: List[str] = None,
-    exclude_extensions: List[str] = None,
-    min_size: int = 0,
-    verbose: bool = False,
-    ignore_dot_dirs: bool = True,
-) -> Tuple[Dict[str, List[str]], int, int, int]:
-    """Find duplicate files in the given directory using parallel processing.
+        Returns:
+            Tuple containing:
+            - Dict[str, List[str]]: Dictionary mapping file hash to list of duplicate file paths
+            - int: Total size of all processed files in bytes
+            - int: Total size taken by duplicate files in bytes
+            - int: Number of files processed
+        """
+        hash_map: Dict[str, List[str]] = defaultdict(list)
+        total_size = 0
+        files_processed = 0
 
-    Args:
-        directory: Root directory to scan
-        exclude_dirs: List of directory paths to exclude from scan
-        exclude_extensions: List of file extensions to exclude (e.g., ['.log', '.tmp'])
-        min_size: Minimum file size in bytes to consider
-        verbose: Whether to print progress information
-        ignore_dot_dirs: Whether to skip directories starting with a dot
+        # Normalize exclude directories to absolute paths
+        exclude_dirs = exclude_dirs or []
+        exclude_dirs = [os.path.abspath(d) for d in exclude_dirs]
 
-    Returns:
-        Tuple containing:
-        - Dict[str, List[str]]: Dictionary mapping file hash to list of duplicate file paths
-        - int: Total size of all processed files in bytes
-        - int: Total size taken by duplicate files in bytes
-        - int: Number of files processed
+        # Normalize exclude extensions
+        exclude_extensions = exclude_extensions or []
+        exclude_extensions = [ext.lower() for ext in exclude_extensions]
 
-    Note:
-        Paths in exclude_dirs are normalized to absolute paths for comparison
-        File extensions in exclude_extensions are converted to lowercase
-    """
-    hash_map: Dict[str, List[str]] = defaultdict(list)
-    total_size = 0
-    files_processed = 0
-
-    # Normalize exclude directories to absolute paths
-    exclude_dirs = exclude_dirs or []
-    exclude_dirs = [os.path.abspath(d) for d in exclude_dirs]
-
-    # Normalize exclude extensions
-    exclude_extensions = exclude_extensions or []
-    exclude_extensions = [ext.lower() for ext in exclude_extensions]
-
-    # Collect all files to process
-    files_to_process = []
-    for root, dirs, files in os.walk(directory):
-        if any(os.path.abspath(root).startswith(d) for d in exclude_dirs):
-            if verbose:
-                print(f"Skipping excluded directory: {root}")
-            continue
-
-        if ignore_dot_dirs:
-            dirs[:] = [d for d in dirs if not d.startswith(".")]
-
-        for filename in files:
-            if exclude_extensions and any(
-                filename.lower().endswith(ext) for ext in exclude_extensions
-            ):
-                if verbose:
-                    print(
-                        f"Skipping excluded file type: {os.path.join(root, filename)}"
-                    )
+        # Collect all files to process
+        files_to_process = []
+        for root, dirs, files in os.walk(directory):
+            if any(os.path.abspath(root).startswith(d) for d in exclude_dirs):
+                self.logger.info(f"Skipping excluded directory: {root}")
                 continue
 
-            filepath = os.path.join(root, filename)
-            files_to_process.append((filepath, min_size, 65536))
+            if ignore_dot_dirs:
+                dirs[:] = [d for d in dirs if not d.startswith(".")]
 
-    # Process files in parallel
-    cpu_count = multiprocessing.cpu_count()
-    with Pool(processes=cpu_count) as pool:
-        if verbose:
-            print(f"Processing files using {cpu_count} CPU cores...")
+            for filename in files:
+                if exclude_extensions and any(
+                    filename.lower().endswith(ext) for ext in exclude_extensions
+                ):
+                    self.logger.info(
+                        f"Skipping excluded file type: {os.path.join(root, filename)}"
+                    )
+                    continue
 
-        results = pool.imap_unordered(process_file, files_to_process)
+                filepath = os.path.join(root, filename)
+                files_to_process.append((filepath, min_size))
 
-        for result in results:
-            if result:
-                file_hash, filepath, file_size = result
-                hash_map[file_hash].append(filepath)
-                total_size += file_size
-                files_processed += 1
+        # Process files in parallel
+        cpu_count = multiprocessing.cpu_count()
+        self.logger.info(f"Processing files using {cpu_count} CPU cores...")
 
-                if verbose and files_processed % 100 == 0:
-                    print(f"Processed {files_processed} files...")
+        with Pool(processes=cpu_count) as pool:
+            results = pool.imap_unordered(self.process_file, files_to_process)
 
-    # Filter out unique files and calculate duplicate size
-    duplicate_files = {h: files for h, files in hash_map.items() if len(files) > 1}
-    duplicate_size = sum(
-        os.path.getsize(files[0]) * (len(files) - 1)
-        for files in duplicate_files.values()
-    )
+            for result in results:
+                if result:
+                    file_hash, filepath, file_size = result
+                    hash_map[file_hash].append(filepath)
+                    total_size += file_size
+                    files_processed += 1
 
-    return duplicate_files, total_size, duplicate_size, files_processed
+                    if verbose and files_processed % 100 == 0:
+                        self.logger.info(f"Processed {files_processed} files...")
+
+        # Filter out unique files and calculate duplicate size
+        duplicate_files = {h: files for h, files in hash_map.items() if len(files) > 1}
+        duplicate_size = sum(
+            os.path.getsize(files[0]) * (len(files) - 1)
+            for files in duplicate_files.values()
+        )
+
+        return duplicate_files, total_size, duplicate_size, files_processed
 
 
 def export_to_file(
@@ -175,12 +225,9 @@ def export_to_file(
             - txt: Human-readable text format with duplicate sets
             - json: Structured JSON with duplicate sets and file sizes
             - csv: Tabular format with set number, size, and file path
-
-    Note:
-        The JSON format includes file sizes and groups duplicates into sets
-        The CSV format assigns a sequential number to each set of duplicates
-        The text format includes human-readable file sizes
     """
+    logger = logging.getLogger(__name__)
+
     if format == "json":
         # Convert to a more JSON-friendly format
         json_data = {
@@ -210,7 +257,21 @@ def export_to_file(
                 for filepath in file_list:
                     f.write(f"  {filepath}\n")
 
-    print(f"Results exported to {output_file} in {format} format")
+    logger.info(f"Results exported to {output_file} in {format} format")
+
+
+def setup_logging(verbose: bool = False) -> None:
+    """Configure logging settings.
+
+    Args:
+        verbose: Whether to enable debug logging
+    """
+    log_level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
 
 def main() -> None:
@@ -282,83 +343,73 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Set up logging
+    setup_logging(args.verbose)
+    logger = logging.getLogger(__name__)
+
     if not os.path.isdir(args.directory):
-        print(f"Error: '{args.directory}' is not a valid directory", file=sys.stderr)
+        logger.error(f"Error: '{args.directory}' is not a valid directory")
         sys.exit(1)
 
     # Convert human-readable size to bytes
     try:
-        # Handle special case for 0B
-        if args.min_size.upper() == "0B":
-            min_size = 0
-        else:
-            # Handle KB, MB, GB, etc.
-            size_str = args.min_size.upper()
-            if size_str.endswith("B"):
-                # Handle plain bytes (e.g., "1B", "100B")
-                if size_str[:-1].isdigit():
-                    min_size = int(size_str[:-1])
-                else:
-                    # Handle KB, MB, GB, TB
-                    if len(size_str) > 2 and not size_str[-2].isdigit():
-                        size_str = size_str[:-1]  # Remove 'B' for unit processing
-                        units = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
-                        if size_str[-1] in units and size_str[:-1].isdigit():
-                            min_size = int(size_str[:-1]) * units[size_str[-1]]
-                        else:
-                            raise ValueError(f"Invalid size format: {args.min_size}")
-                    else:
-                        raise ValueError(f"Invalid size format: {args.min_size}")
-            elif size_str.isdigit():
-                min_size = int(size_str)
-            else:
-                raise ValueError(f"Invalid size format: {args.min_size}")
-    except Exception:
-        print(f"Error: Invalid minimum size format: {args.min_size}", file=sys.stderr)
-        print("Please use formats like: 10KB, 5MB, 1GB", file=sys.stderr)
+        min_size = SizeParser.parse_size(args.min_size)
+    except ValueError as e:
+        logger.error(f"Error: {str(e)}")
+        logger.error("Please use formats like: 10KB, 5MB, 1GB")
         sys.exit(1)
 
-    print(f"\nScanning directory: {args.directory}")
+    logger.info(f"\nScanning directory: {args.directory}")
     if args.exclude_dir:
-        print(f"Excluding directories: {', '.join(args.exclude_dir)}")
+        logger.info(f"Excluding directories: {', '.join(args.exclude_dir)}")
     if args.exclude_ext:
-        print(f"Excluding file extensions: {', '.join(args.exclude_ext)}")
+        logger.info(f"Excluding file extensions: {', '.join(args.exclude_ext)}")
     if min_size > 0:
-        print(
-            f"Minimum file size: {args.min_size}"
-        )  # Use original input format instead of humanize
+        logger.info(f"Minimum file size: {args.min_size}")
 
     if args.dry_run:
         print("\nDRY RUN - showing what would be scanned without processing files")
+        print(f"Directory to scan: {args.directory}")
+        print(
+            f"Excluded directories: {', '.join(args.exclude_dir) if args.exclude_dir else 'None'}"
+        )
+        print(
+            f"Excluded extensions: {', '.join(args.exclude_ext) if args.exclude_ext else 'None'}"
+        )
+        print(f"Minimum file size: {args.min_size}")
         return
 
-    print("This might take a while depending on the number and size of files...\n")
+    logger.info(
+        "This might take a while depending on the number and size of files...\n"
+    )
 
     start_time = time.time()
-    duplicates, total_size, duplicate_size, files_processed = find_duplicates(
-        args.directory,
-        exclude_dirs=args.exclude_dir,
-        exclude_extensions=args.exclude_ext,
-        min_size=min_size,
-        verbose=args.verbose,
-        ignore_dot_dirs=not args.include_dot_dirs,  # Pass the inverse of include_dot_dirs
+    file_processor = FileProcessor()
+    duplicates, total_size, duplicate_size, files_processed = (
+        file_processor.find_duplicates(
+            args.directory,
+            exclude_dirs=args.exclude_dir,
+            exclude_extensions=args.exclude_ext,
+            min_size=min_size,
+            verbose=args.verbose,
+            ignore_dot_dirs=not args.include_dot_dirs,
+        )
     )
     elapsed_time = time.time() - start_time
 
-    if not duplicates:
-        print("No duplicate files found.")
-        return
-
     # Print results with improved formatting
+    if not duplicates:
+        logger.info("No duplicate files found.")
+        return
     duplicate_count = sum(len(files) for files in duplicates.values()) - len(duplicates)
-    print(f"Scan completed in {elapsed_time:.2f} seconds")
-    print(f"Files processed: {files_processed}")
-    print(f"Found {duplicate_count} duplicate files in {len(duplicates)} sets")
-    print(f"Total space used: {humanize.naturalsize(total_size)}")
-    print(f"Space taken by duplicates: {humanize.naturalsize(duplicate_size)}")
-    print(f"Potential space savings: {humanize.naturalsize(duplicate_size)}\n")
+    logger.info(f"Scan completed in {elapsed_time:.2f} seconds")
+    logger.info(f"Files processed: {files_processed}")
+    logger.info(f"Found {duplicate_count} duplicate files in {len(duplicates)} sets")
+    logger.info(f"Total space used: {humanize.naturalsize(total_size)}")
+    logger.info(f"Space taken by duplicates: {humanize.naturalsize(duplicate_size)}")
+    logger.info(f"Potential space savings: {humanize.naturalsize(duplicate_size)}\n")
 
-    print("Duplicate files:")
+    print("\nDuplicate files:")
     for hash_value, file_list in duplicates.items():
         print(
             f"\nDuplicate set (size: {humanize.naturalsize(os.path.getsize(file_list[0]))})"
