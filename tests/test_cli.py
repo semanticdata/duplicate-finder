@@ -1,3 +1,5 @@
+import csv
+import json
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -121,3 +123,81 @@ def test_cli_export_results(temp_dir):
     assert "Duplicate set" in content
     assert "dup1.txt" in content
     assert "dup2.txt" in content
+
+
+def test_cli_dry_run(temp_dir, capsys):
+    """Test the dry run functionality.
+
+    Verifies that the program correctly shows what would be scanned
+    without actually processing any files.
+
+    Args:
+        temp_dir: Pytest fixture providing a temporary directory
+        capsys: Pytest fixture for capturing stdout/stderr
+    """
+    with patch(
+        "sys.argv",
+        [
+            "duplicate-finder",
+            str(temp_dir),
+            "--dry-run",
+            "-e",
+            "excluded",
+            "-x",
+            ".log",
+            "-m",
+            "1MB",
+        ],
+    ):
+        main()
+
+    captured = capsys.readouterr()
+    assert "DRY RUN" in captured.out
+    assert str(temp_dir) in captured.out
+    assert "excluded" in captured.out
+    assert ".log" in captured.out
+    assert "1MB" in captured.out
+
+
+def test_cli_export_formats(temp_dir):
+    """Test exporting results in different formats.
+
+    Verifies that the program can correctly export duplicate file
+    information in txt, json, and csv formats.
+
+    Args:
+        temp_dir: Pytest fixture providing a temporary directory
+    """
+    # Create duplicate files
+    (temp_dir / "dup1.txt").write_text("duplicate")
+    (temp_dir / "dup2.txt").write_text("duplicate")
+
+    # Test JSON export
+    json_file = temp_dir / "duplicates.json"
+    with patch(
+        "sys.argv",
+        ["duplicate-finder", str(temp_dir), "-o", str(json_file), "--format", "json"],
+    ):
+        main()
+
+    assert json_file.exists()
+    with open(json_file) as f:
+        json_data = json.load(f)
+    assert "duplicate_sets" in json_data
+    assert len(json_data["duplicate_sets"]) > 0
+
+    # Test CSV export
+    csv_file = temp_dir / "duplicates.csv"
+    with patch(
+        "sys.argv",
+        ["duplicate-finder", str(temp_dir), "-o", str(csv_file), "--format", "csv"],
+    ):
+        main()
+
+    assert csv_file.exists()
+    with open(csv_file) as f:
+        csv_reader = csv.reader(f)
+        header = next(csv_reader)
+        assert header == ["Set", "Size", "File"]
+        rows = list(csv_reader)
+        assert len(rows) > 0

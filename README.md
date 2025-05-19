@@ -9,9 +9,11 @@ This script is used to find duplicate files in a directory. It uses the MD5 hash
 - Ability to exclude specific file extensions
 - Minimum file size filtering to ignore small files
 - Verbose output option for detailed progress information
-- Export results to a text file
+- Export results in multiple formats (TXT, JSON, CSV)
 - Human-readable file size reporting
 - Automatic exclusion of dot directories (like .git) by default
+- Dry run mode to preview scan configuration
+- Flexible output formatting options
 
 ## Usage
 
@@ -25,12 +27,14 @@ python main.py [directory] [options]
 
 ### Options
 
-- -e, --exclude-dir : Directories to exclude (can be used multiple times)
-- -x, --exclude-ext : File extensions to exclude (can be used multiple times)
-- -m, --min-size : Minimum file size to consider (e.g. 10KB, 5MB, 1GB)
-- -o, --output : Export results to a file
-- -v, --verbose : Show verbose output during scanning
-- --include-dot-dirs : Include directories that start with a dot (like .git)
+- `-e, --exclude-dir` : Directories to exclude (can be used multiple times)
+- `-x, --exclude-ext` : File extensions to exclude (can be used multiple times)
+- `-m, --min-size` : Minimum file size to consider (e.g. 10KB, 5MB, 1GB)
+- `-o, --output` : Export results to a file (defaults to 'duplicates.txt' if no filename provided)
+- `--format` : Output format (txt, json, or csv)
+- `--dry-run` : Show what would be scanned without processing files
+- `-v, --verbose` : Show verbose output during scanning
+- `--include-dot-dirs` : Include directories that start with a dot (like .git)
 
 ## Examples
 
@@ -92,6 +96,40 @@ The script provides the following information:
 - Space taken by duplicates
 - Potential space savings
 - Detailed list of duplicate files grouped by content
+
+### Output Formats
+
+#### Text Format (Default)
+
+```
+Duplicate set (size: 1.5MB)
+  /path/to/file1.txt
+  /path/to/file2.txt
+```
+
+#### JSON Format
+
+```json
+{
+  "duplicates": [
+    {
+      "size": 1500000,
+      "files": [
+        "/path/to/file1.txt",
+        "/path/to/file2.txt"
+      ]
+    }
+  ]
+}
+```
+
+#### CSV Format
+
+```csv
+Size,FilePath
+1500000,/path/to/file1.txt
+1500000,/path/to/file2.txt
+```
 
 ## Testing
 
