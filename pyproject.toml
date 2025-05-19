@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "humanize>=4.12.2",
+    "rich>=14.0.0",
 ]
 
 [dependency-groups]

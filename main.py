@@ -20,6 +20,16 @@ from multiprocessing import Pool
 from typing import Dict, List, Optional, Tuple
 
 import humanize
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+)
+from rich.table import Table
 
 
 class SizeParser:
@@ -266,12 +276,72 @@ def setup_logging(verbose: bool = False) -> None:
     Args:
         verbose: Whether to enable debug logging
     """
+    console = Console()
+
+    class RichHandler(logging.Handler):
+        def emit(self, record):
+            try:
+                msg = self.format(record)
+                style = "bold red" if record.levelno >= logging.ERROR else "blue"
+                console.print(f"[{style}]{msg}[/{style}]")
+            except Exception:
+                self.handleError(record)
+
     log_level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    logger = logging.getLogger()
+    logger.setLevel(log_level)
+
+    # Remove existing handlers and add rich handler
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+    logger.addHandler(RichHandler())
+
+
+def export_to_file(
+    duplicates: Dict[str, List[str]], output_file: str, format: str = "txt"
+) -> None:
+    """Export duplicate files list to a file in the specified format.
+
+    Args:
+        duplicates: Dictionary mapping file hash to list of duplicate file paths
+        output_file: Path where the output file will be created
+        format: Output format, one of 'txt', 'json', or 'csv'
+            - txt: Human-readable text format with duplicate sets
+            - json: Structured JSON with duplicate sets and file sizes
+            - csv: Tabular format with set number, size, and file path
+    """
+    logger = logging.getLogger(__name__)
+
+    if format == "json":
+        # Convert to a more JSON-friendly format
+        json_data = {
+            "duplicate_sets": [
+                {"size": os.path.getsize(files[0]), "files": files}
+                for files in duplicates.values()
+            ]
+        }
+        with open(output_file, "w") as f:
+            json.dump(json_data, f, indent=2)
+
+    elif format == "csv":
+        with open(output_file, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Set", "Size", "File"])
+            for i, (_, files) in enumerate(duplicates.items(), 1):
+                size = os.path.getsize(files[0])
+                for filepath in files:
+                    writer.writerow([i, size, filepath])
+
+    else:  # txt format
+        with open(output_file, "w") as f:
+            for hash_value, file_list in duplicates.items():
+                f.write(
+                    f"\nDuplicate set (size: {humanize.naturalsize(os.path.getsize(file_list[0]))})\n"
+                )
+                for filepath in file_list:
+                    f.write(f"  {filepath}\n")
+
+    logger.info(f"Results exported to {output_file} in {format} format")
 
 
 def main() -> None:
@@ -343,83 +413,106 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Set up logging
-    setup_logging(args.verbose)
-    logger = logging.getLogger(__name__)
+    # Set up rich console
+    console = Console()
 
     if not os.path.isdir(args.directory):
-        logger.error(f"Error: '{args.directory}' is not a valid directory")
+        console.print(
+            f"[bold red]Error:[/bold red] '{args.directory}' is not a valid directory"
+        )
         sys.exit(1)
 
     # Convert human-readable size to bytes
     try:
         min_size = SizeParser.parse_size(args.min_size)
     except ValueError as e:
-        logger.error(f"Error: {str(e)}")
-        logger.error("Please use formats like: 10KB, 5MB, 1GB")
+        console.print(f"[bold red]Error:[/bold red] {str(e)}")
+        console.print("[yellow]Please use formats like: 10KB, 5MB, 1GB[/yellow]")
         sys.exit(1)
 
-    logger.info(f"\nScanning directory: {args.directory}")
+    # Create a panel with scan information
+    scan_info = Table.grid(padding=1)
+    scan_info.add_row("Directory:", args.directory)
     if args.exclude_dir:
-        logger.info(f"Excluding directories: {', '.join(args.exclude_dir)}")
+        scan_info.add_row("Excluding directories:", ", ".join(args.exclude_dir))
     if args.exclude_ext:
-        logger.info(f"Excluding file extensions: {', '.join(args.exclude_ext)}")
+        scan_info.add_row("Excluding extensions:", ", ".join(args.exclude_ext))
     if min_size > 0:
-        logger.info(f"Minimum file size: {args.min_size}")
+        scan_info.add_row("Minimum file size:", args.min_size)
+
+    console.print(Panel(scan_info, title="Scan Configuration", border_style="blue"))
 
     if args.dry_run:
-        print("\nDRY RUN - showing what would be scanned without processing files")
-        print(f"Directory to scan: {args.directory}")
-        print(
-            f"Excluded directories: {', '.join(args.exclude_dir) if args.exclude_dir else 'None'}"
+        console.print(
+            "\n[yellow]DRY RUN[/yellow] - showing what would be scanned without processing files"
         )
-        print(
-            f"Excluded extensions: {', '.join(args.exclude_ext) if args.exclude_ext else 'None'}"
-        )
-        print(f"Minimum file size: {args.min_size}")
         return
 
-    logger.info(
-        "This might take a while depending on the number and size of files...\n"
-    )
+    console.print("\n[blue]Starting scan...[/blue]")
 
     start_time = time.time()
     file_processor = FileProcessor()
-    duplicates, total_size, duplicate_size, files_processed = (
-        file_processor.find_duplicates(
-            args.directory,
-            exclude_dirs=args.exclude_dir,
-            exclude_extensions=args.exclude_ext,
-            min_size=min_size,
-            verbose=args.verbose,
-            ignore_dot_dirs=not args.include_dot_dirs,
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Scanning for duplicates...", total=None)
+        duplicates, total_size, duplicate_size, files_processed = (
+            file_processor.find_duplicates(
+                args.directory,
+                exclude_dirs=args.exclude_dir,
+                exclude_extensions=args.exclude_ext,
+                min_size=min_size,
+                verbose=args.verbose,
+                ignore_dot_dirs=not args.include_dot_dirs,
+            )
         )
-    )
+        progress.update(task, completed=100)
+
     elapsed_time = time.time() - start_time
 
-    # Print results with improved formatting
     if not duplicates:
-        logger.info("No duplicate files found.")
+        console.print("\n[green]No duplicate files found.[/green]")
         return
-    duplicate_count = sum(len(files) for files in duplicates.values()) - len(duplicates)
-    logger.info(f"Scan completed in {elapsed_time:.2f} seconds")
-    logger.info(f"Files processed: {files_processed}")
-    logger.info(f"Found {duplicate_count} duplicate files in {len(duplicates)} sets")
-    logger.info(f"Total space used: {humanize.naturalsize(total_size)}")
-    logger.info(f"Space taken by duplicates: {humanize.naturalsize(duplicate_size)}")
-    logger.info(f"Potential space savings: {humanize.naturalsize(duplicate_size)}\n")
 
-    print("\nDuplicate files:")
+    # Create results table
+    results_table = Table(title="Scan Results", border_style="blue")
+    results_table.add_column("Metric", style="cyan")
+    results_table.add_column("Value", style="green")
+
+    duplicate_count = sum(len(files) for files in duplicates.values()) - len(duplicates)
+    results_table.add_row("Scan Duration", f"{elapsed_time:.2f} seconds")
+    results_table.add_row("Files Processed", str(files_processed))
+    results_table.add_row("Duplicate Sets", str(len(duplicates)))
+    results_table.add_row("Total Duplicates", str(duplicate_count))
+    results_table.add_row("Total Space Used", humanize.naturalsize(total_size))
+    results_table.add_row(
+        "Space Used by Duplicates", humanize.naturalsize(duplicate_size)
+    )
+    results_table.add_row(
+        "Potential Space Savings", humanize.naturalsize(duplicate_size)
+    )
+
+    console.print("\n", results_table)
+
+    # Display duplicate sets
+    console.print("\n[bold blue]Duplicate Files:[/bold blue]")
     for hash_value, file_list in duplicates.items():
-        print(
-            f"\nDuplicate set (size: {humanize.naturalsize(os.path.getsize(file_list[0]))})"
-        )
+        size = humanize.naturalsize(os.path.getsize(file_list[0]))
+        console.print(f"\n[yellow]Duplicate set[/yellow] (size: {size})")
         for filepath in file_list:
-            print(f"  {filepath}")
+            console.print(f"  [green]•[/green] {filepath}")
 
     # Export results if requested
     if args.output:
         export_to_file(duplicates, args.output, args.format)
+        console.print(
+            f"\n[blue]Results exported to[/blue] [green]{args.output}[/green] [blue]in {args.format} format[/blue]"
+        )
 
 
 if __name__ == "__main__":
