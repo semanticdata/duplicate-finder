@@ -8,15 +8,36 @@ from main import calculate_file_hash, find_duplicates, process_file
 
 @pytest.fixture
 def temp_dir():
+    """Create a temporary directory for test files.
+
+    Returns:
+        Path: A pathlib.Path object pointing to the temporary directory.
+        The directory is automatically cleaned up after each test.
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
         yield Path(tmpdir)
 
 
 def create_test_file(path: Path, content: str) -> None:
+    """Create a test file with specified content.
+
+    Args:
+        path: The path where the file should be created.
+        content: The content to write to the file.
+    """
     path.write_text(content)
 
 
 def test_calculate_file_hash(temp_dir):
+    """Test the file hash calculation functionality.
+
+    Verifies that:
+    1. The same file produces consistent hash values
+    2. Modifying file content changes the hash value
+
+    Args:
+        temp_dir: Pytest fixture providing a temporary directory
+    """
     # Create a test file with known content
     test_file = temp_dir / "test.txt"
     test_content = "Hello, World!"
@@ -34,6 +55,16 @@ def test_calculate_file_hash(temp_dir):
 
 
 def test_process_file(temp_dir):
+    """Test the file processing functionality with size filtering.
+
+    Verifies that:
+    1. Files smaller than minimum size are filtered out (return None)
+    2. Files larger than minimum size are processed correctly
+    3. The returned tuple contains correct types (str, str, int)
+
+    Args:
+        temp_dir: Pytest fixture providing a temporary directory
+    """
     # Test with file smaller than min_size
     small_file = temp_dir / "small.txt"
     create_test_file(small_file, "small")
@@ -52,6 +83,18 @@ def test_process_file(temp_dir):
 
 
 def test_find_duplicates(temp_dir):
+    """Test the duplicate file finding functionality.
+
+    Verifies that the function correctly:
+    1. Identifies sets of duplicate files
+    2. Excludes files in specified directories
+    3. Respects file extension exclusions
+    4. Handles minimum size filtering
+    5. Calculates correct file and duplicate size statistics
+
+    Args:
+        temp_dir: Pytest fixture providing a temporary directory
+    """
     # Create unique files
     create_test_file(temp_dir / "unique1.txt", "content1")
     create_test_file(temp_dir / "unique2.txt", "content2")
