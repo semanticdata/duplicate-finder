@@ -93,9 +93,7 @@ def test_cli_with_options(temp_dir, capsys):
     assert "Duplicate set" in captured.out
     assert str(temp_dir / "file1.txt") in captured.out
     assert str(temp_dir / "file2.txt") in captured.out
-    assert (
-        str(excluded_dir / "excluded.txt") not in captured.out
-    )  # Verify excluded dir is respected
+    assert str(excluded_dir / "excluded.txt") not in captured.out  # Verify excluded dir is respected
 
 
 def test_cli_export_results(temp_dir):

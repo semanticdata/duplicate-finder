@@ -4,18 +4,19 @@ version = "0.1.0"
 description = "This script is used to find duplicate files in a directory."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = [
-    "humanize>=4.12.2",
-    "rich>=14.0.0",
-]
+dependencies = ["humanize>=4.12.2", "rich>=14.0.0"]
 
 [dependency-groups]
-dev = [
-    "pytest>=8.3.5",
-    "pytest-cov>=6.1.1",
-]
+dev = ["pytest>=8.3.5", "pytest-cov>=6.1.1", "ruff>=0.11.10"]
 
 [tool.pytest.ini_options]
-pythonpath = [
-    "."
-]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+indent-width = 4
+target-version = "py312"
+lint.select = ["E", "F", "I"]
+lint.ignore = []
+lint.fixable = ["ALL"]
+lint.dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"

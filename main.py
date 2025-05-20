@@ -109,9 +109,7 @@ class FileProcessor:
                 md5.update(data)
         return md5.hexdigest()
 
-    def process_file(
-        self, file_info: Tuple[str, int]
-    ) -> Optional[Tuple[str, str, int]]:
+    def process_file(self, file_info: Tuple[str, int]) -> Optional[Tuple[str, str, int]]:
         """Process a single file by calculating its hash if it meets size criteria.
 
         Args:
@@ -125,9 +123,7 @@ class FileProcessor:
         try:
             file_size = os.path.getsize(filepath)
             if file_size < min_size:
-                self.logger.debug(
-                    f"Skipping {filepath} (size: {file_size} < {min_size})"
-                )
+                self.logger.debug(f"Skipping {filepath} (size: {file_size} < {min_size})")
                 return None
 
             file_hash = self.calculate_file_hash(filepath)
@@ -185,12 +181,8 @@ class FileProcessor:
                 dirs[:] = [d for d in dirs if not d.startswith(".")]
 
             for filename in files:
-                if exclude_extensions and any(
-                    filename.lower().endswith(ext) for ext in exclude_extensions
-                ):
-                    self.logger.info(
-                        f"Skipping excluded file type: {os.path.join(root, filename)}"
-                    )
+                if exclude_extensions and any(filename.lower().endswith(ext) for ext in exclude_extensions):
+                    self.logger.info(f"Skipping excluded file type: {os.path.join(root, filename)}")
                     continue
 
                 filepath = os.path.join(root, filename)
@@ -215,17 +207,12 @@ class FileProcessor:
 
         # Filter out unique files and calculate duplicate size
         duplicate_files = {h: files for h, files in hash_map.items() if len(files) > 1}
-        duplicate_size = sum(
-            os.path.getsize(files[0]) * (len(files) - 1)
-            for files in duplicate_files.values()
-        )
+        duplicate_size = sum(os.path.getsize(files[0]) * (len(files) - 1) for files in duplicate_files.values())
 
         return duplicate_files, total_size, duplicate_size, files_processed
 
 
-def export_to_file(
-    duplicates: Dict[str, List[str]], output_file: str, format: str = "txt"
-) -> None:
+def export_to_file(duplicates: Dict[str, List[str]], output_file: str, format: str = "txt") -> None:
     """Export duplicate files list to a file in the specified format.
 
     Args:
@@ -241,10 +228,7 @@ def export_to_file(
     if format == "json":
         # Convert to a more JSON-friendly format
         json_data = {
-            "duplicate_sets": [
-                {"size": os.path.getsize(files[0]), "files": files}
-                for files in duplicates.values()
-            ]
+            "duplicate_sets": [{"size": os.path.getsize(files[0]), "files": files} for files in duplicates.values()]
         }
         with open(output_file, "w") as f:
             json.dump(json_data, f, indent=2)
@@ -261,9 +245,7 @@ def export_to_file(
     else:  # txt format
         with open(output_file, "w") as f:
             for hash_value, file_list in duplicates.items():
-                f.write(
-                    f"\nDuplicate set (size: {humanize.naturalsize(os.path.getsize(file_list[0]))})\n"
-                )
+                f.write(f"\nDuplicate set (size: {humanize.naturalsize(os.path.getsize(file_list[0]))})\n")
                 for filepath in file_list:
                     f.write(f"  {filepath}\n")
 
@@ -356,9 +338,7 @@ def main() -> None:
         action="store_true",
         help="Show what would be found without processing files",
     )
-    parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Show verbose output"
-    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Show verbose output")
     parser.add_argument(
         "--include-dot-dirs",
         action="store_true",
@@ -370,9 +350,7 @@ def main() -> None:
     console = Console()
 
     if not os.path.isdir(args.directory):
-        console.print(
-            f"[bold red]Error:[/bold red] '{args.directory}' is not a valid directory"
-        )
+        console.print(f"[bold red]Error:[/bold red] '{args.directory}' is not a valid directory")
         sys.exit(1)
 
     # Convert human-readable size to bytes
@@ -396,9 +374,7 @@ def main() -> None:
     console.print(Panel(scan_info, title="Scan Configuration", border_style="blue"))
 
     if args.dry_run:
-        console.print(
-            "\n[yellow]DRY RUN[/yellow] - showing what would be scanned without processing files"
-        )
+        console.print("\n[yellow]DRY RUN[/yellow] - showing what would be scanned without processing files")
         return
 
     console.print("\n[blue]Starting scan...[/blue]")
@@ -414,15 +390,13 @@ def main() -> None:
         console=console,
     ) as progress:
         task = progress.add_task("Scanning for duplicates...", total=None)
-        duplicates, total_size, duplicate_size, files_processed = (
-            file_processor.find_duplicates(
-                args.directory,
-                exclude_dirs=args.exclude_dir,
-                exclude_extensions=args.exclude_ext,
-                min_size=min_size,
-                verbose=args.verbose,
-                ignore_dot_dirs=not args.include_dot_dirs,
-            )
+        duplicates, total_size, duplicate_size, files_processed = file_processor.find_duplicates(
+            args.directory,
+            exclude_dirs=args.exclude_dir,
+            exclude_extensions=args.exclude_ext,
+            min_size=min_size,
+            verbose=args.verbose,
+            ignore_dot_dirs=not args.include_dot_dirs,
         )
         progress.update(task, completed=100)
 
@@ -443,12 +417,8 @@ def main() -> None:
     results_table.add_row("Duplicate Sets", str(len(duplicates)))
     results_table.add_row("Total Duplicates", str(duplicate_count))
     results_table.add_row("Total Space Used", humanize.naturalsize(total_size))
-    results_table.add_row(
-        "Space Used by Duplicates", humanize.naturalsize(duplicate_size)
-    )
-    results_table.add_row(
-        "Potential Space Savings", humanize.naturalsize(duplicate_size)
-    )
+    results_table.add_row("Space Used by Duplicates", humanize.naturalsize(duplicate_size))
+    results_table.add_row("Potential Space Savings", humanize.naturalsize(duplicate_size))
 
     console.print("\n", results_table)
 
